@@ -851,8 +851,7 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
     // not advertise `usbip` gets an accurate "not supported" message when the
     // button is pressed, instead of the button vanishing for no visible
     // reason.
-    if ((isWindows || isLinux) &&
-        widget.ffi.connType == ConnType.defaultConn) {
+    if ((isWindows || isLinux) && widget.ffi.connType == ConnType.defaultConn) {
       toolbarItems.add(_UsbMenu(id: widget.id, ffi: widget.ffi));
     }
     if (!isWeb) {
@@ -2881,22 +2880,29 @@ class _UsbMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _IconMenuButton(
+    return _IconSubmenuButton(
       tooltip: translate('USB forwarding'),
       icon: const Icon(
         Icons.usb,
-        size: 20,
         color: Colors.white,
+        size: 18,
       ),
-      onPressed: () =>
-          rustDeskWinManager.newRemoteUsb(id),
+      ffi: ffi,
       color: _ToolbarTheme.blueColor,
       hoverColor: _ToolbarTheme.hoverBlueColor,
+      menuChildrenGetter: (_) => [
+        MenuButton(
+          child: Text(translate('USB forwarding')),
+          ffi: ffi,
+          onPressed: () => rustDeskWinManager.newRemoteUsb(id),
+        ),
+      ],
     );
   }
 }
 
-class _VoiceCallMenu extends StatelessWidget {  final String id;
+class _VoiceCallMenu extends StatelessWidget {
+  final String id;
   final FFI ffi;
   _VoiceCallMenu({
     Key? key,
