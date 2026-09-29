@@ -227,7 +227,6 @@ pub fn core_main() -> Option<Vec<String>> {
                 }
                 return None;
             } else if args[0] == "--usbip-install-msi"
-                || args[0] == "--usbip-install-client"
                 || args[0] == "--usbip-attach"
             {
                 // Invoked elevated (`platform::elevate` -> UAC on
@@ -242,12 +241,6 @@ pub fn core_main() -> Option<Vec<String>> {
                         );
                         std::process::Command::new(msiexec)
                             .args(["/i", path, "/qn", "/norestart"])
-                            .status()
-                            .ok()
-                    }
-                    ("--usbip-install-client", Some(path)) => {
-                        std::process::Command::new(path)
-                            .args(["/VERYSILENT", "/NORESTART", "/SUPPRESSMSGBOXES"])
                             .status()
                             .ok()
                     }
@@ -290,6 +283,51 @@ pub fn core_main() -> Option<Vec<String>> {
                     _ => None,
                 };
                 let _ = run;
+                return None;
+            } else if args[0] == "--usbip-install-client-files" {
+                // Elevated child: lays down the project-embedded USB/IP
+                // client files (`<exe dir>\usbip\`) and registers the two
+                // signed drivers -- the same two steps usbipd-win's service
+                // installer performs; no standalone wrapper involved.
+                let target = match args.get(1).map(|p| p.trim_matches('"')).map(std::path::PathBuf::from) {
+                    Some(t) => t,
+                    _ => return None,
+                };
+                let client_dir = target.join("usbip");
+                if let Err(e) = std::fs::create_dir_all(&client_dir) {
+                    log::error!("usbip: failed to create {:?}: {}", client_dir, e);
+                    return None;
+                }
+                for (name, bytes) in crate::platform::USBIP_CLIENT_FILES {
+                    let path = client_dir.join(name);
+                    if let Err(e) = std::fs::write(&path, bytes) {
+                        log::error!("usbip: failed to write {:?}: {}", path, e);
+                        return None;
+                    }
+                }
+                let exe = crate::platform::windows_usbip::usbip_client_dir()
+                    .map(|d| d.join("usbip.exe"));
+                let _ = exe;
+                if let Some(dir) = crate::platform::windows_usbip::usbip_client_dir() {
+                    // Upper filter driver first, then the UDE host
+                    // controller, mirroring usbipd's own installer order.
+                    if let Err(e) = std::process::Command::new("pnputil.exe")
+                        .args(["/add-driver", &dir.join("usbip2_filter.inf").to_string_lossy(), "/install"])
+                        .status()
+                    {
+                        log::error!("usbip: pnputil failed: {}", e);
+                    }
+                    if let Err(e) = std::process::Command::new(dir.join("devnode.exe"))
+                        .args([
+                            "install",
+                            &dir.join("usbip2_ude.inf").to_string_lossy(),
+                            "ROOT\\USBIP_WIN2\\UDE",
+                        ])
+                        .status()
+                    {
+                        log::error!("usbip: devnode install failed: {}", e);
+                    }
+                }
                 return None;
             } else if args[0] == "--update" {
                 if config::is_disable_installation() {

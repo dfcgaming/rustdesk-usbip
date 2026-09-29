@@ -20,22 +20,102 @@ const USBIPD_WIN_DIR: &str = "usbipd-win";
 const USBIP_CLIENT_DIR: &str = "USBip";
 const USBIPD_SERVICE_EXE: &str = "usbipd.exe";
 
-// The two installers their upstream projects ship, vendored so the first
-// Remote USB use sets the machine up on its own instead of asking the user
-// to download anything:
-// - `usbipd-win` (GPL-3.0, https://github.com/dorssel/usbipd-win): serves
-//   the USB/IP protocol on TCP 3240 (the *server* side).
-// - `usbip-win2` (BSD-2-Clause, https://github.com/vadimgrn/usbip-win2): the
-//   vhci/UDE client with the upstream-Linux-compatible `usbip` CLI (the
-//   *client* side). Its installer restarts USB hubs during driver
-//   installation; the first attach therefore shows the usual elevation and
-//   printer-installer-like waiting.
-const USBIP_SETUP_BYTES: &[u8] =
-    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/usbip/USBip-0.9.8.1-x64.exe"));
+// The vendored `usbipd-win` (GPL-3.0, https://github.com/dorssel/usbipd-win)
+// MSI: it serves the USB/IP wire protocol on TCP 3240 (the *server* side) and
+// brings its own signed stub driver, which only `msiexec` can register; keep
+// it embedded and run it headlessly.
 const USBIPD_MSI_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/res/usbip/usbipd-win_5.3.0_x64.msi"
 ));
+
+/// The raw USB/IP *client* stack (usbip-win2, BSD-2-Clause) is shipped as
+/// plain project files rather than an installer: the signed `usbip2_ude` /
+/// `usbip2_filter` driver package plus the mount CLI are extracted from this
+/// binary into `rustdesk.exe`'s own directory and registered from there --
+/// usbipd's own service-level setup (`pnputil` + `devnode`) needs exactly the
+///_kernels these files carry, so any fully separate wrapper would only add
+/// an app to install.
+pub(crate) const USBIP_CLIENT_FILES: &[(&str, &[u8])] = &[
+    (
+        "usbip.exe",
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/res/usbip/USBip-files/usbip.exe"
+        )),
+    ),
+    (
+        "libusbip.dll",
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/res/usbip/USBip-files/libusbip.dll"
+        )),
+    ),
+    (
+        "resources.dll",
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/res/usbip/USBip-files/resources.dll"
+        )),
+    ),
+    (
+        "devnode.exe",
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/res/usbip/USBip-files/devnode.exe"
+        )),
+    ),
+    (
+        "usbip2_ude.cat",
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/res/usbip/USBip-files/usbip2_ude.cat"
+        )),
+    ),
+    (
+        "usbip2_ude.inf",
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/res/usbip/USBip-files/usbip2_ude.inf"
+        )),
+    ),
+    (
+        "usbip2_ude.sys",
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/res/usbip/USBip-files/usbip2_ude.sys"
+        )),
+    ),
+    (
+        "usbip2_filter.cat",
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/res/usbip/USBip-files/usbip2_filter.cat"
+        )),
+    ),
+    (
+        "usbip2_filter.inf",
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/res/usbip/USBip-files/usbip2_filter.inf"
+        )),
+    ),
+    (
+        "usbip2_filter.sys",
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/res/usbip/USBip-files/usbip2_filter.sys"
+        )),
+    ),
+];
+
+/// The directory beside `rustdesk.exe` that carries the client stack.
+pub(crate) fn usbip_client_dir() -> Option<std::path::PathBuf> {
+    std::env::current_exe()
+        .ok()?
+        .parent()
+        .map(|p| p.join("usbip"))
+}
 
 fn find_binaries(dir: &str, name: &str) -> Vec<String> {
     let mut candidates = Vec::new();
@@ -77,6 +157,14 @@ fn find_usbipd() -> Option<String> {
 }
 
 fn find_usbip() -> Option<String> {
+    // Project dir first (`rustdesk.exe\usbip\usbip.exe`), then whatever a
+    // previous standalone install left on the machine.
+    if let Some(dir) = usbip_client_dir() {
+        let exe = dir.join("usbip.exe");
+        if exe.exists() {
+            return exe.to_str().map(str::to_string);
+        }
+    }
     find_binaries(USBIP_CLIENT_DIR, "usbip")
         .into_iter()
         .find(|p| std::path::Path::new(p).exists())
@@ -96,6 +184,16 @@ fn extract_installer(bytes: &[u8], file_name: &str) -> Option<std::path::PathBuf
 fn await_file(dir: &str, file: &str, deadline_ms: u64) -> Option<String> {
     let path = std::env::var_os("ProgramFiles")
         .map(|p| std::path::PathBuf::from(p).join(dir).join(file))?;
+    for _ in 0..deadline_ms / 500 {
+        if path.exists() {
+            return path.to_str().map(str::to_string);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    None
+}
+
+fn await_file_at(path: std::path::PathBuf, deadline_ms: u64) -> Option<String> {
     for _ in 0..deadline_ms / 500 {
         if path.exists() {
             return path.to_str().map(str::to_string);
@@ -127,55 +225,22 @@ fn install_usbipd() -> Option<String> {
     }
 }
 
-/// Runs the vendored usbip-win2 installer the same way, then waits for the
-/// client CLI to appear.
+/// Runs the vendored usbip-win2 driver + mount CLI: extracts the project's
+/// embedded files beside `rustdesk.exe` and registers the two signed
+/// drivers (`pnputil` / `devnode` -- exactly what usbipd's own service
+/// installer does), from an elevated RustDesk child so no separate
+/// application is ever involved.
 fn install_usbip() -> Option<String> {
     if let Some(path) = find_usbip() {
         return Some(path);
     }
-    let installer =
-        extract_installer(USBIP_SETUP_BYTES, "USBip-x64.exe")?;
-    log::info!("usbip: installing USBip (usbip-win2, embedded installer)");
+    let target = usbip_client_dir()?;
+    log::info!("usbip: installing USBip client (project-embedded files)");
     run_embedded_install(&format!(
-        "--usbip-install-client \"{}\"",
-        installer.to_string_lossy()
+        "--usbip-install-client-files \"{}\"",
+        target.to_string_lossy()
     ));
-    let path = await_file(USBIP_CLIENT_DIR, "usbip.exe", 300_000);
-    if let Some(path) = path.as_ref() {
-        // The Inno installer ships far more than the client needs (debug
-        // symbols, a GUI app, an SDK tree, the test-mode helper batch files).
-        // Trim to the minimal set the RustDesk mount path uses: usbip.exe,
-        // its two DLLs, devnode (driver install helper) and the driver
-        // package itself. Nothing else stays on disk.
-        let base = std::path::Path::new(path)
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_default();
-        for extra in [
-            "wusbip.exe",
-            "usbip.pdb",
-            "libusbip.pdb",
-            "resources.pdb",
-            "libdrv.pdb",
-            "usbip2_filter.pdb",
-            "usbip2_ude.pdb",
-            "devnode.pdb",
-        ] {
-            let extra = base.join(extra);
-            if let Err(err) = std::fs::remove_file(&extra) {
-                if err.kind() != std::io::ErrorKind::NotFound {
-                    log::debug!("usbip: could not remove {:?}: {}", extra, err);
-                }
-            }
-        }
-        for sub in ["include", "lib"] {
-            let dir = base.join(sub);
-            if dir.is_dir() {
-                std::fs::remove_dir_all(&dir).ok();
-            }
-        }
-    }
-    path
+    await_file_at(target.join("usbip.exe"), 300_000)
 }
 
 /// Runs one embedded-installer invocation. When this process is already
