@@ -2409,8 +2409,28 @@ impl Connection {
             return;
         };
         usbip.handle(ch, || {
+            #[cfg(feature = "flutter")]
+            Self::log_usb_permission_diagnostics("usb channel", &self.control_permissions);
             Self::permission(keys::OPTION_ALLOW_USBIP, &self.control_permissions)
         });
+    }
+
+    /// One line per deciding frame: the per-session control-permissions bitmap
+    /// this peer connected with, and what the local `allow-usbip` option says
+    /// -- so a "no permission" first report pins down the refusing clause.
+    #[cfg(feature = "flutter")]
+    fn log_usb_permission_diagnostics(
+        at: &'static str,
+        control_permissions: &Option<ControlPermissions>,
+    ) {
+        log::info!(
+            "usb-permission check ({}): session control_permissions={} permissions_bits={:#064x} local allow-usbip={:?} ({}-decimal)",
+            at,
+            control_permissions.is_some(),
+            control_permissions.as_ref().map(|cp| cp.permissions).unwrap_or(0),
+            Config::get_option(keys::OPTION_ALLOW_USBIP),
+            Config::get_option(keys::OPTION_ALLOW_USBIP)
+        );
     }
 
     #[inline]
@@ -2976,6 +2996,8 @@ impl Connection {
                     }
                     #[cfg(any(target_os = "linux", target_os = "windows"))]
                     {
+                        #[cfg(feature = "flutter")]
+                        Self::log_usb_permission_diagnostics("RemoteUsb login", &self.control_permissions);
                         if !Self::permission(keys::OPTION_ALLOW_USBIP, &self.control_permissions)
                         {
                             self.send_login_error("No permission of USB forwarding").await;
