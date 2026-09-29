@@ -17,22 +17,28 @@ use crate::{
 use base::message_proto::*;
 use hbb_common::{
     bytes::Bytes, log, timeout,
-    regex::Regex,
     tokio::{
         io::AsyncWriteExt,
         net::TcpStream,
         sync::mpsc,
     },
 };
+
+#[cfg(target_os = "linux")]
+use hbb_common::regex::Regex;
 use serde_json::json;
+
+#[cfg(target_os = "linux")]
 use std::process::Command;
 
 const USBIPD_ADDR: &str = "127.0.0.1:3240";
 const CONNECT_TIMEOUT_MS: u64 = 3000;
+#[cfg(target_os = "linux")]
 const USBIP_HOST_DRIVER_DIR: &str = "/sys/bus/usb/drivers/usbip-host";
 
 // `Option`, not `Regex` directly -- see the identical comment in
 // `client/usbip_attach.rs`.
+#[cfg(target_os = "linux")]
 lazy_static::lazy_static! {
     static ref USB_DEVICE_RE: Option<Regex> =
         Regex::new(r"busid=([0-9]+-[0-9.]+)#usbid=([0-9a-fA-F]{4}):([0-9a-fA-F]{4})#")
@@ -40,6 +46,7 @@ lazy_static::lazy_static! {
             .ok();
 }
 
+#[cfg(target_os = "linux")]
 fn usbip_command() -> Command {
     let mut cmd = Command::new("usbip");
     let path = std::env::var("PATH").unwrap_or_default();
@@ -50,6 +57,7 @@ fn usbip_command() -> Command {
 /// Runs `usbip list -p -l` and cross-references `/sys/.../usbip-host` to
 /// report which devices are already shared. Blocking; call off the FFI
 /// thread.
+#[cfg(target_os = "linux")]
 pub fn list_local_devices() -> Vec<UsbDevice> {
     let output = match usbip_command().args(["list", "-p", "-l"]).output() {
         Ok(o) => o,
@@ -65,6 +73,7 @@ pub fn list_local_devices() -> Vec<UsbDevice> {
 
 /// Pure text parsing half of `list_local_devices`, split out for testing
 /// without a real `usbip`/sysfs on the machine running the tests.
+#[cfg(target_os = "linux")]
 fn parse_local_devices(stdout: &str, shared: &std::collections::HashSet<String>) -> Vec<UsbDevice> {
     let Some(device_re) = USB_DEVICE_RE.as_ref() else {
         return Vec::new();
@@ -88,6 +97,7 @@ fn parse_local_devices(stdout: &str, shared: &std::collections::HashSet<String>)
 
 /// Bus ids currently bound to the `usbip-host` driver, read from sysfs
 /// instead of parsing free-text `usbip list` output.
+#[cfg(target_os = "linux")]
 fn shared_bus_ids() -> std::collections::HashSet<String> {
     let Ok(entries) = std::fs::read_dir(USBIP_HOST_DRIVER_DIR) else {
         return Default::default();
@@ -98,6 +108,13 @@ fn shared_bus_ids() -> std::collections::HashSet<String> {
         .filter_map(|e| e.file_name().into_string().ok())
         .filter(|name| name.chars().next().is_some_and(|c| c.is_ascii_digit()))
         .collect()
+}
+
+/// Windows: the controller machine shares devices through `usbipd-win` the
+/// same way the controlled machine does.
+#[cfg(windows)]
+pub fn list_local_devices() -> Vec<UsbDevice> {
+    crate::platform::list_local_devices_impl()
 }
 
 /// Blocking; call off the FFI thread. Bind/unbind needs root, so it goes
@@ -139,6 +156,12 @@ pub fn unbind_device_retrying(bus_id: &str) -> bool {
 /// request names as long as it's shared for some other, unrelated reason.
 /// So the actual `OP_REQ_IMPORT` busid is inspected before any byte reaches
 /// `usbipd`, not just trusted from `Open`.
+/// Windows: shared state comes from `usbipd state`'s JSON instead of sysfs.
+#[cfg(windows)]
+fn shared_bus_ids() -> std::collections::HashSet<String> {
+    crate::platform::shared_bus_ids_impl()
+}
+
 pub(crate) async fn run_channel(
     id: i32,
     bus_id: String,

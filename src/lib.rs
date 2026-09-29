@@ -48,7 +48,7 @@ mod lang;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod port_forward;
 mod port_forward_mux;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 mod usbip_flow;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

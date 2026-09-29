@@ -368,7 +368,7 @@ pub struct Connection {
     view_camera: bool,
     terminal: bool,
     remote_usb: bool,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     usbip: Option<super::usbip_session::UsbSession>,
     port_forward_socket: Option<Framed<TcpStream, BytesCodec>>,
     port_forward_mux: Option<super::port_forward_mux::PortForwardMux>,
@@ -587,7 +587,7 @@ impl Connection {
             view_camera: false,
             terminal: false,
             remote_usb: false,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
             usbip: None,
             port_forward_socket: None,
             port_forward_mux: None,
@@ -1795,7 +1795,7 @@ impl Connection {
         (format!("{}:{}", pf.host, pf.port), is_rdp)
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn init_usbip(&mut self) {
         crate::usbip_flow::cap_packet_size(&mut self.stream);
         // `inner.tx` is set for the connection's whole life; `None` here is unreachable.
@@ -2086,7 +2086,7 @@ impl Connection {
         {
             terminal = terminal && portable_pty::win::check_support().is_ok();
         }
-        let usbip = cfg!(target_os = "linux");
+        let usbip = cfg!(any(target_os = "linux", target_os = "windows"));
         pi.username = username;
         pi.sas_enabled = sas_enabled;
         pi.features = Some(Features {
@@ -2210,7 +2210,7 @@ impl Connection {
             self.init_terminal_service().await;
         } else if self.remote_usb {
             self.keyboard = false;
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
             self.init_usbip();
         } else if self.view_camera {
             if !wait_session_id_confirm {
@@ -2402,7 +2402,7 @@ impl Connection {
         });
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn handle_usb_channel(&mut self, ch: UsbChannel) {
         let Some(usbip) = self.usbip.as_mut() else {
             log::debug!("usb channel frame on a connection without an active usbip session");
@@ -2967,14 +2967,14 @@ impl Connection {
                     self.port_forward_address = addr;
                 }
                 Some(login_request::Union::RemoteUsb(_)) => {
-                    #[cfg(not(target_os = "linux"))]
+                    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
                     {
-                        self.send_login_error("USB forwarding is only supported on Linux")
+                        self.send_login_error("USB forwarding is only supported on Linux or Windows")
                             .await;
                         sleep(1.).await;
                         return false;
                     }
-                    #[cfg(target_os = "linux")]
+                    #[cfg(any(target_os = "linux", target_os = "windows"))]
                     {
                         if !Self::permission(keys::OPTION_ALLOW_USBIP, &self.control_permissions)
                         {
@@ -4115,9 +4115,9 @@ impl Connection {
                 }
                 Some(message::Union::PortForwardChannel(ch)) => self.handle_port_forward_channel(ch),
                 Some(message::Union::UsbChannel(ch)) => {
-                    #[cfg(target_os = "linux")]
+                    #[cfg(any(target_os = "linux", target_os = "windows"))]
                     self.handle_usb_channel(ch);
-                    #[cfg(not(target_os = "linux"))]
+                    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
                     log::warn!("USB channel frame received but not supported on this platform");
                 }
                 Some(message::Union::TerminalAction(action)) => {
@@ -5336,7 +5336,7 @@ impl Connection {
         if let Some(mut mux) = self.port_forward_mux.take() {
             mux.close_all();
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         if let Some(mut usbip) = self.usbip.take() {
             usbip.close_all();
         }

@@ -11,7 +11,6 @@ use base::message_proto::*;
 use hbb_common::{
     bytes::Bytes,
     log, timeout,
-    regex::Regex,
     tokio::{
         self,
         io::AsyncWriteExt,
@@ -19,17 +18,23 @@ use hbb_common::{
         sync::{mpsc, Semaphore},
     },
 };
+
+#[cfg(target_os = "linux")]
+use hbb_common::regex::Regex;
 use std::{
     collections::{HashMap, HashSet},
-    process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
 };
 
+#[cfg(target_os = "linux")]
+use std::process::Command;
+
 const USBIPD_ADDR: &str = "127.0.0.1:3240";
 const CONNECT_TIMEOUT_MS: u64 = 3000;
+#[cfg(target_os = "linux")]
 const USBIP_HOST_DRIVER_DIR: &str = "/sys/bus/usb/drivers/usbip-host";
 // Caps how many relay tasks (and their `usbipd` TCP connections) a single
 // permitted peer can make us spawn; with `usbip_flow::CHANNEL_WINDOW` per
@@ -435,6 +440,7 @@ fn send_result(tx: &Sender, msg: Message) -> bool {
 
 // `Option`, not `Regex` directly -- see the identical comment in
 // `client/usbip_attach.rs`.
+#[cfg(target_os = "linux")]
 lazy_static::lazy_static! {
     static ref USB_DEVICE_RE: Option<Regex> =
         Regex::new(r"busid=([0-9]+-[0-9.]+)#usbid=([0-9a-fA-F]{4}):([0-9a-fA-F]{4})#")
@@ -445,6 +451,7 @@ lazy_static::lazy_static! {
 /// Debian/Ubuntu install `usbip` under `/usr/sbin`, which is on root's PATH
 /// but not a regular desktop user's -- widen it so a plain `Command::new`
 /// can still find the binary when RustDesk runs unprivileged.
+#[cfg(target_os = "linux")]
 fn usbip_command() -> Command {
     let mut cmd = Command::new("usbip");
     let path = std::env::var("PATH").unwrap_or_default();
@@ -455,6 +462,7 @@ fn usbip_command() -> Command {
 /// Runs `usbip list -p -l` and cross-references `/sys/.../usbip-host` to
 /// report which devices are already shared. Blocking; call via
 /// `spawn_blocking`.
+#[cfg(target_os = "linux")]
 fn list_local_devices() -> Vec<UsbDevice> {
     let output = match usbip_command().args(["list", "-p", "-l"]).output() {
         Ok(o) => o,
@@ -474,8 +482,17 @@ fn list_local_devices() -> Vec<UsbDevice> {
     parse_local_devices(&stdout, &shared)
 }
 
+/// Windows: the controlled side lists devices and discovers shared state
+/// through `usbipd-win`'s `usbipd state` JSON instead of the sysfs +
+/// `usbip list -p -l` pair.
+#[cfg(windows)]
+fn list_local_devices() -> Vec<UsbDevice> {
+    crate::platform::list_local_devices_impl()
+}
+
 /// Pure text parsing half of `list_local_devices`, split out for testing
 /// without a real `usbip`/sysfs on the machine running the tests.
+#[cfg(target_os = "linux")]
 fn parse_local_devices(stdout: &str, shared: &std::collections::HashSet<String>) -> Vec<UsbDevice> {
     let Some(device_re) = USB_DEVICE_RE.as_ref() else {
         return Vec::new();
@@ -499,6 +516,7 @@ fn parse_local_devices(stdout: &str, shared: &std::collections::HashSet<String>)
 
 /// Bus ids currently bound to the `usbip-host` driver, read from sysfs
 /// instead of parsing free-text `usbip list` output.
+#[cfg(target_os = "linux")]
 fn shared_bus_ids() -> std::collections::HashSet<String> {
     let Ok(entries) = std::fs::read_dir(USBIP_HOST_DRIVER_DIR) else {
         return Default::default();
@@ -509,6 +527,12 @@ fn shared_bus_ids() -> std::collections::HashSet<String> {
         .filter_map(|e| e.file_name().into_string().ok())
         .filter(|name| name.chars().next().is_some_and(|c| c.is_ascii_digit()))
         .collect()
+}
+
+/// Windows: shared state comes from `usbipd state`'s JSON instead of sysfs.
+#[cfg(windows)]
+fn shared_bus_ids() -> std::collections::HashSet<String> {
+    crate::platform::shared_bus_ids_impl()
 }
 
 /// Linux USB bus ids are `<bus>-<port>[.<port>...]` (e.g. "1-2.3"), shorter
@@ -546,6 +570,7 @@ fn bind_device(bus_id: &str, bind: bool) -> bool {
 /// holding the device "in use" for a brief moment. Wait for `usbip-host` to
 /// release it (an unprivileged sysfs read) instead of retrying the
 /// privileged unbind, each attempt of which would be another password prompt.
+#[cfg(target_os = "linux")]
 fn bind_device_when_released(bus_id: &str, bind: bool) -> bool {
     if !bind && is_valid_bus_id(bus_id) {
         let status = std::path::Path::new(USBIP_HOST_DRIVER_DIR)
@@ -561,6 +586,27 @@ fn bind_device_when_released(bus_id: &str, bind: bool) -> bool {
         }
     }
     bind_device(bus_id, bind)
+}
+
+/// Windows variant: `usbipd unbind` refuses a device whose USB/IP client is
+/// still attached (`usbipd a` reports it as `Attached`), without any sysfs /
+/// driver state we can read unprivileged ahead of the privileged call. The
+/// relay's own teardown is asynchronous relative to this request exactly like
+/// on Linux, so retry the unbind itself for a brief window and report the
+/// last failure.
+#[cfg(windows)]
+fn bind_device_when_released(bus_id: &str, bind: bool) -> bool {
+    if bind {
+        return bind_device(bus_id, true);
+    }
+    for attempt in 1..=10 {
+        if bind_device(bus_id, false) {
+            return true;
+        }
+        log::debug!("usbip: {} still busy, unbind retry {}/10", bus_id, attempt);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    false
 }
 
 fn is_bound(bound: &Mutex<Option<HashSet<String>>>, bus_id: &str) -> bool {
@@ -587,6 +633,7 @@ fn record_binding(bound: &Mutex<Option<HashSet<String>>>, bus_id: &str, bind: bo
 }
 
 #[cfg(test)]
+#[cfg(target_os = "linux")]
 mod tests {
     use super::*;
     use std::collections::HashSet;

@@ -9,6 +9,12 @@ pub use windows::*;
 pub mod windows;
 
 #[cfg(windows)]
+pub mod windows_usbip;
+
+#[cfg(windows)]
+pub use windows_usbip::*;
+
+#[cfg(windows)]
 pub mod win_device;
 
 #[cfg(target_os = "macos")]
