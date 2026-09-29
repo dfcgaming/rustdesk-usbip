@@ -18,6 +18,24 @@ use std::{collections::HashSet, process::Command};
 
 const USBIPD_WIN_DIR: &str = "usbipd-win";
 const USBIP_CLIENT_DIR: &str = "USBip";
+const USBIPD_SERVICE_EXE: &str = "usbipd.exe";
+
+// The two installers their upstream projects ship, vendored so the first
+// Remote USB use sets the machine up on its own instead of asking the user
+// to download anything:
+// - `usbipd-win` (GPL-3.0, https://github.com/dorssel/usbipd-win): serves
+//   the USB/IP protocol on TCP 3240 (the *server* side).
+// - `usbip-win2` (BSD-2-Clause, https://github.com/vadimgrn/usbip-win2): the
+//   vhci/UDE client with the upstream-Linux-compatible `usbip` CLI (the
+//   *client* side). Its installer restarts USB hubs during driver
+//   installation; the first attach therefore shows the usual elevation and
+//   printer-installer-like waiting.
+const USBIP_SETUP_BYTES: &[u8] =
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/usbip/USBip-0.9.8.1-x64.exe"));
+const USBIPD_MSI_BYTES: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/res/usbip/usbipd-win_5.3.0_x64.msi"
+));
 
 fn find_binaries(dir: &str, name: &str) -> Vec<String> {
     let mut candidates = Vec::new();
@@ -51,6 +69,73 @@ fn find_usbip() -> Option<String> {
     find_binaries(USBIP_CLIENT_DIR, "usbip")
         .into_iter()
         .find(|p| std::path::Path::new(p).exists())
+}
+
+fn extract_installer(bytes: &[u8], file_name: &str) -> Option<std::path::PathBuf> {
+    let dir = std::env::temp_dir().join(format!("rustdesk-usbip-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join(file_name);
+    if std::fs::write(&path, bytes).is_err() {
+        log::error!("usbip: failed to extract {:?}", path);
+        return None;
+    }
+    Some(path)
+}
+
+fn await_file(dir: &str, file: &str, deadline_ms: u64) -> Option<String> {
+    let path = std::env::var_os("ProgramFiles")
+        .map(|p| std::path::PathBuf::from(p).join(dir).join(file))?;
+    for _ in 0..deadline_ms / 500 {
+        if path.exists() {
+            return path.to_str().map(str::to_string);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    None
+}
+
+/// Runs the vendored usbipd-win MSI silently (one elevation admin prompt),
+/// then waits for the service's CLI to appear.
+fn install_usbipd() -> Option<String> {
+    match find_usbipd() {
+        Some(exists_path) => Some(exists_path),
+        None => {
+            let installer =
+                extract_installer(USBIPD_MSI_BYTES, "usbipd-win-x64.msi")?;
+            let msiexec = std::env::var("WINDIR")
+                .map(|w| format!("{}\\System32\\msiexec.exe", w))
+                .unwrap_or_else(|_| "C:\\Windows\\System32\\msiexec.exe".to_string());
+            log::info!("usbip: installing usbipd-win");
+            let ok = run_elevated_wait(&format!(
+                "\"{}\" /i \"{}\" /qn /norestart",
+                msiexec,
+                installer.to_string_lossy()
+            ));
+            if !ok {
+                log::error!("usbip: usbipd-win install failed");
+            }
+            await_file(USBIPD_WIN_DIR, USBIPD_SERVICE_EXE, 180_000)
+        }
+    }
+}
+
+/// Runs the vendored usbip-win2 installer silently (one elevation prompt),
+/// then waits for the client CLI to appear.
+fn install_usbip() -> Option<String> {
+    if let Some(path) = find_usbip() {
+        return Some(path);
+    }
+    let installer =
+        extract_installer(USBIP_SETUP_BYTES, "USBip-x64.exe")?;
+    log::info!("usbip: installing USBip (usbip-win2)");
+    let ok = run_elevated_wait(&format!(
+        "\"{}\" /VERYSILENT /NORESTART /SUPPRESSMSGBOXES",
+        installer.to_string_lossy()
+    ));
+    if !ok {
+        log::error!("usbip: USBip install failed");
+    }
+    await_file(USBIP_CLIENT_DIR, "usbip.exe", 300_000)
 }
 
 fn is_elevated() -> bool {
@@ -135,8 +220,20 @@ fn run_elevated_wait(cmd: &str) -> bool {
 /// behavior where the caller relies only on success/failure reporting.
 pub fn run_usbip_privileged(args: &[&str]) -> bool {
     let (exe, mapped_args) = map_args(args);
+    let exe = match exe {
+        Some(exe) => Some(exe),
+        None => {
+            // First use: bring the underlying tool chain up (vendored
+            // installers, one elevation prompt) and retry.
+            if args.first() == Some(&"bind") || args.first() == Some(&"unbind") {
+                install_usbipd()
+            } else {
+                install_usbip()
+            }
+        }
+    };
     let Some(exe) = exe else {
-        log::error!("usbip: {} tool not found on this machine", args[0]);
+        log::error!("usbip: {} not found on this machine", args[0]);
         return false;
     };
     let command = format!(
@@ -170,7 +267,7 @@ pub fn run_usbip_privileged(args: &[&str]) -> bool {
 /// file this process pre-created, so it can read it back regardless of which
 /// administrator identity the prompt ends up in.
 pub fn run_usbip_attach_privileged(listener_port: u16, bus_id: &str) -> Option<String> {
-    let exe = find_usbip()?;
+    let exe = install_usbip()?;
     let port_str = listener_port.to_string();
     if is_elevated() {
         let attach_args = vec![
