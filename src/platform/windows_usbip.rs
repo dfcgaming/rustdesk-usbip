@@ -105,15 +105,13 @@ fn install_usbipd() -> Option<String> {
             let msiexec = std::env::var("WINDIR")
                 .map(|w| format!("{}\\System32\\msiexec.exe", w))
                 .unwrap_or_else(|_| "C:\\Windows\\System32\\msiexec.exe".to_string());
+            let _ = msiexec;
             log::info!("usbip: installing usbipd-win");
-            let r = crate::platform
-                ::run_uac("cmd.exe", &format!(
-                    "/C \"{}\" /i \"{}\" /qn /norestart",
-                    msiexec,
-                    installer.to_string_lossy()
-                ));
-            eprintln!("usbip probe: run_uac -> {:?}", r);
-            let ok = r.unwrap_or(false);
+            let ok = crate::platform::elevate(&format!(
+                "--usbip-install-msi \"{}\"",
+                installer.to_string_lossy()
+            ))
+            .unwrap_or(false);
             if !ok {
                 log::error!("usbip: usbipd-win install failed");
             }
@@ -131,12 +129,11 @@ fn install_usbip() -> Option<String> {
     let installer =
         extract_installer(USBIP_SETUP_BYTES, "USBip-x64.exe")?;
     log::info!("usbip: installing USBip (usbip-win2)");
-    let ok = crate::platform
-        ::run_uac("cmd.exe", &format!(
-            "/C \"{}\" /VERYSILENT /NORESTART /SUPPRESSMSGBOXES",
-            installer.to_string_lossy()
-        ))
-        .unwrap_or(false);
+    let ok = crate::platform::elevate(&format!(
+        "--usbip-install-client \"{}\"",
+        installer.to_string_lossy()
+    ))
+    .unwrap_or(false);
     if !ok {
         log::error!("usbip: USBip install failed");
     }
@@ -277,9 +274,11 @@ pub fn run_usbip_attach_privileged(listener_port: u16, bus_id: &str) -> Option<S
         "\"{}\" -t {} attach -r 127.0.0.1 -b {} > \"{}\" 2>&1 & \"{}\" port >> \"{}\" 2>&1",
         exe, port_str, bus_id, out_path, exe, out_path
     );
-    let ok = crate::platform
-        ::run_uac("cmd.exe", &format!("/C \"{}\"", attach_cmd))
-        .unwrap_or(false);
+    let ok = crate::platform::elevate(&format!(
+        "--usbip-attach {} \"{}\" \"{}\"",
+        port_str, bus_id, out_path
+    ))
+    .unwrap_or(false);
     if !ok {
         return None;
     }

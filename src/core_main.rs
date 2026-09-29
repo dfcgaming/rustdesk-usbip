@@ -226,6 +226,71 @@ pub fn core_main() -> Option<Vec<String>> {
                     log::error!("Failed to uninstall: {}", err);
                 }
                 return None;
+            } else if args[0] == "--usbip-install-msi"
+                || args[0] == "--usbip-install-client"
+                || args[0] == "--usbip-attach"
+            {
+                // Invoked elevated (`platform::elevate` -> UAC on
+                // `RustDesk.exe` itself, the popup title remote sessions
+                // capture reliably). Runs the vendored installer / attach
+                // headlessly, writes any output for the caller, exits.
+                let run = match (args[0].as_str(), args.get(1)) {
+                    ("--usbip-install-msi", Some(path)) => {
+                        let msiexec = format!(
+                            "{}\\System32\\msiexec.exe",
+                            std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into())
+                        );
+                        std::process::Command::new(msiexec)
+                            .args(["/i", path, "/qn", "/norestart"])
+                            .status()
+                            .ok()
+                    }
+                    ("--usbip-install-client", Some(path)) => {
+                        std::process::Command::new(path)
+                            .args(["/VERYSILENT", "/NORESTART", "/SUPPRESSMSGBOXES"])
+                            .status()
+                            .ok()
+                    }
+                    ("--usbip-attach", Some(port)) => match (args.get(2), args.get(3)) {
+                        (Some(bus_id), Some(out_path)) => {
+                            // Values are validated by the caller before the
+                            // elevation request; only ASCII digits/'-'/'.'
+                            // and plain paths reach here.
+                            let output = std::process::Command::new("usbip")
+                                .args([
+                                    "-t",
+                                    port,
+                                    "attach",
+                                    "-r",
+                                    "127.0.0.1",
+                                    "-b",
+                                    bus_id,
+                                ])
+                                .output();
+                            let mut data = match output {
+                                Ok(o) => {
+                                    format!(
+                                        "{}{}",
+                                        String::from_utf8_lossy(&o.stdout),
+                                        String::from_utf8_lossy(&o.stderr)
+                                    )
+                                }
+                                Err(err) => format!("usbip spawn failed: {}", err),
+                            };
+                            if let Ok(o) = std::process::Command::new("usbip").arg("port").output() {
+                                data.push_str(&String::from_utf8_lossy(&o.stdout));
+                            }
+                            if let Err(err) = std::fs::write(out_path, data) {
+                                log::error!("usb attach: failed to write output: {}", err);
+                            }
+                            None
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let _ = run;
+                return None;
             } else if args[0] == "--update" {
                 if config::is_disable_installation() {
                     return None;
