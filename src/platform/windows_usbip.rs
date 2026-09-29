@@ -300,6 +300,8 @@ pub fn run_usbip_attach_privileged(listener_port: u16, bus_id: &str) -> Option<S
 struct UsbipdDevice {
     #[serde(rename = "BusId")]
     bus_id: String,
+    #[serde(rename = "Description")]
+    description: String,
     #[serde(rename = "InstanceId")]
     instance_id: String,
     #[serde(rename = "StubInstanceId")]
@@ -359,7 +361,8 @@ pub(crate) fn list_local_devices_impl() -> Vec<UsbDevice> {
             let (vendor, product) = ids_from_instance_id(&d.instance_id);
             UsbDevice {
                 shared: shared.contains(&d.bus_id),
-                bus_id: d.bus_id.clone(),
+                description: d.description,
+                bus_id: d.bus_id,
                 vendor,
                 product,
                 attached_port: -1,

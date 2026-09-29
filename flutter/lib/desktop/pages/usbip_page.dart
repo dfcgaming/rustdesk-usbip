@@ -110,8 +110,8 @@ class _UsbipPageState extends State<UsbipPage> {
               ),
               if (model.localDevices.isEmpty)
                 Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   child: Text(translate('No USB devices')),
                 )
               else
@@ -126,8 +126,8 @@ class _UsbipPageState extends State<UsbipPage> {
               ),
               if (model.devices.isEmpty)
                 Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   child: Text(model.loading
                       ? translate('Loading...')
                       : translate('No USB devices')),
@@ -183,11 +183,11 @@ class _UsbipPageState extends State<UsbipPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  device.product.isNotEmpty ? device.product : device.busId,
+                  device.displayName,
                   style: const TextStyle(fontWeight: FontWeight.w500),
                 ),
                 Text(
-                  '${device.busId}  ${device.vendor}',
+                  '${device.busId}  ${device.description.isNotEmpty ? "" : device.vendor}',
                   style: TextStyle(
                       fontSize: 12, color: Theme.of(context).hintColor),
                 ),
@@ -195,9 +195,8 @@ class _UsbipPageState extends State<UsbipPage> {
             ),
           ),
           ElevatedButton(
-            onPressed: pending
-                ? null
-                : () => model.togglePush(device.busId, !pushed),
+            onPressed:
+                pending ? null : () => model.togglePush(device.busId, !pushed),
             child: Text(pushed ? translate('Unpush') : translate('Push')),
           ),
         ],
@@ -219,11 +218,11 @@ class _UsbipPageState extends State<UsbipPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  device.product.isNotEmpty ? device.product : device.busId,
+                  device.displayName,
                   style: const TextStyle(fontWeight: FontWeight.w500),
                 ),
                 Text(
-                  '${device.busId}  ${device.vendor}',
+                  '${device.busId}  ${device.description.isNotEmpty ? "" : device.vendor}',
                   style: TextStyle(
                       fontSize: 12, color: Theme.of(context).hintColor),
                 ),

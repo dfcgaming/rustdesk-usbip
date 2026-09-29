@@ -1011,6 +1011,9 @@ message UsbDevice {
   bool shared = 4;
   // Controller side only: local vhci port if attached, -1 otherwise.
   int32 attached_port = 5;
+  // Human-readable device name when the platform provides one (Windows
+  // `usbipd state` does); empty on Linux, where vendor/product ids are used.
+  string description = 6;
 }
 
 message UsbDeviceList {

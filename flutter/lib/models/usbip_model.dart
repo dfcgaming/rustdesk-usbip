@@ -11,13 +11,25 @@ class UsbDeviceInfo {
   // Local devices only: pushed by this session, as opposed to `shared`,
   // which also covers devices shared by the CLI or another session.
   final bool pushed;
+  // Human-readable name when the platform provides one (Windows does);
+  // empty on Linux, where vendor/product ids are shown.
+  final String description;
 
   UsbDeviceInfo.fromJson(Map<String, dynamic> json)
       : busId = json['bus_id']?.toString() ?? '',
         vendor = json['vendor']?.toString() ?? '',
         product = json['product']?.toString() ?? '',
         shared = json['shared'] == true,
-        pushed = json['pushed'] == true;
+        pushed = json['pushed'] == true,
+        description = json['description']?.toString() ?? '';
+
+  /// Best available display name: platform-provided description, else the
+  /// product id string, else the bus id -- never a bare hash-like pair.
+  String get displayName {
+    if (description.isNotEmpty) return description;
+    if (product.isNotEmpty) return '$vendor:$product';
+    return busId;
+  }
 }
 
 /// Controller-side state for a RemoteUsb session: the list of devices the
