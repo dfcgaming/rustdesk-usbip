@@ -105,50 +105,106 @@ fn await_file(dir: &str, file: &str, deadline_ms: u64) -> Option<String> {
     None
 }
 
-/// Runs the vendored usbipd-win MSI silently (one elevation admin prompt),
-/// then waits for the service's CLI to appear.
+/// Runs the vendored usbipd-win MSI silently, preferring the **service
+/// context** route -- the vendored installers are embedded in this binary
+/// (`include_bytes!`), so an elevated `RustDesk.exe` child (never an external
+/// download) runs them headlessly: from the RustDesk service (SYSTEM) there
+/// is no prompt at all; from a plain desktop process it is one signed
+/// `RustDesk.exe` UAC prompt. Then waits for the service's CLI to appear.
 fn install_usbipd() -> Option<String> {
     match find_usbipd() {
         Some(exists_path) => Some(exists_path),
         None => {
             let installer =
                 extract_installer(USBIPD_MSI_BYTES, "usbipd-win-x64.msi")?;
-            let msiexec = std::env::var("WINDIR")
-                .map(|w| format!("{}\\System32\\msiexec.exe", w))
-                .unwrap_or_else(|_| "C:\\Windows\\System32\\msiexec.exe".to_string());
-            let _ = msiexec;
-            log::info!("usbip: installing usbipd-win");
-            let ok = crate::platform::elevate(&format!(
+            log::info!("usbip: installing usbipd-win (embedded installer)");
+            run_embedded_install(&format!(
                 "--usbip-install-msi \"{}\"",
                 installer.to_string_lossy()
-            ))
-            .unwrap_or(false);
-            if !ok {
-                log::error!("usbip: usbipd-win install failed");
-            }
+            ));
             await_file(USBIPD_WIN_DIR, USBIPD_SERVICE_EXE, 180_000)
         }
     }
 }
 
-/// Runs the vendored usbip-win2 installer silently (one elevation prompt),
-/// then waits for the client CLI to appear.
+/// Runs the vendored usbip-win2 installer the same way, then waits for the
+/// client CLI to appear.
 fn install_usbip() -> Option<String> {
     if let Some(path) = find_usbip() {
         return Some(path);
     }
     let installer =
         extract_installer(USBIP_SETUP_BYTES, "USBip-x64.exe")?;
-    log::info!("usbip: installing USBip (usbip-win2)");
-    let ok = crate::platform::elevate(&format!(
+    log::info!("usbip: installing USBip (usbip-win2, embedded installer)");
+    run_embedded_install(&format!(
         "--usbip-install-client \"{}\"",
         installer.to_string_lossy()
-    ))
-    .unwrap_or(false);
-    if !ok {
-        log::error!("usbip: USBip install failed");
+    ));
+    let path = await_file(USBIP_CLIENT_DIR, "usbip.exe", 300_000);
+    if let Some(path) = path.as_ref() {
+        // The Inno installer ships far more than the client needs (debug
+        // symbols, a GUI app, an SDK tree, the test-mode helper batch files).
+        // Trim to the minimal set the RustDesk mount path uses: usbip.exe,
+        // its two DLLs, devnode (driver install helper) and the driver
+        // package itself. Nothing else stays on disk.
+        let base = std::path::Path::new(path)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_default();
+        for extra in [
+            "wusbip.exe",
+            "usbip.pdb",
+            "libusbip.pdb",
+            "resources.pdb",
+            "libdrv.pdb",
+            "usbip2_filter.pdb",
+            "usbip2_ude.pdb",
+            "devnode.pdb",
+        ] {
+            let extra = base.join(extra);
+            if let Err(err) = std::fs::remove_file(&extra) {
+                if err.kind() != std::io::ErrorKind::NotFound {
+                    log::debug!("usbip: could not remove {:?}: {}", extra, err);
+                }
+            }
+        }
+        for sub in ["include", "lib"] {
+            let dir = base.join(sub);
+            if dir.is_dir() {
+                std::fs::remove_dir_all(&dir).ok();
+            }
+        }
     }
-    await_file(USBIP_CLIENT_DIR, "usbip.exe", 300_000)
+    path
+}
+
+/// Runs one embedded-installer invocation. When this process is already
+/// elevated (the RustDesk service, SYSTEM) it runs the installer directly;
+/// otherwise it goes through `platform::elevate` -- one RustDesk-signed UAC
+/// prompt, which remote sessions capture.
+fn run_embedded_install(child_args: &str) {
+    if is_elevated() {
+        let exe = std::env::current_exe()
+            .map(|e| e.to_string_lossy().to_string())
+            .unwrap_or_default();
+        // `child_args` is `--usbip-install-* "<path>"`; the path came from us
+        // inside %TEMP%, so the plain space split is exact.
+        if let Some((flag, rest)) = child_args.split_once(' ') {
+            let path = rest.trim().trim_matches('"').to_string();
+            let out = Command::new(&exe).args([flag, &path]).output();
+            if let Ok(output) = out {
+                log::info!(
+                    "usbip: embedded installer finished: rc={:?} out={}",
+                    output.status.code(),
+                    String::from_utf8_lossy(&output.stdout).trim()
+                );
+            }
+        } else {
+            log::error!("usbip: malformed embedded installer args");
+        }
+    } else {
+        crate::platform::elevate(child_args);
+    }
 }
 
 fn is_elevated() -> bool {
