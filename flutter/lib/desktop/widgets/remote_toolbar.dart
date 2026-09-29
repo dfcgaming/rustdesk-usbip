@@ -847,9 +847,11 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
       toolbarItems.add(_KeyboardMenu(id: widget.id, ffi: widget.ffi));
     }
     toolbarItems.add(_ChatMenu(id: widget.id, ffi: widget.ffi));
-    final piUsbip = widget.ffi.ffiModel.pi.features.usbip;
+    // Always show USB forwarding on desktop Windows/Linux: a peer that does
+    // not advertise `usbip` gets an accurate "not supported" message when the
+    // button is pressed, instead of the button vanishing for no visible
+    // reason.
     if ((isWindows || isLinux) &&
-        piUsbip &&
         widget.ffi.connType == ConnType.defaultConn) {
       toolbarItems.add(_UsbMenu(id: widget.id, ffi: widget.ffi));
     }

@@ -39,13 +39,24 @@ const USBIPD_MSI_BYTES: &[u8] = include_bytes!(concat!(
 
 fn find_binaries(dir: &str, name: &str) -> Vec<String> {
     let mut candidates = Vec::new();
-    for var in ["ProgramFiles", "ProgramW6432", "ProgramData"] {
+    for var in [
+        "ProgramFiles",
+        "ProgramW6432",
+        "ProgramFiles(x86)",
+        "ProgramData",
+    ] {
         if let Some(base) = std::env::var_os(var) {
             let mut path = std::path::PathBuf::from(base).join(dir).join(name);
             path.set_extension("exe");
             if let Some(s) = path.to_str() {
                 candidates.push(s.to_string());
             }
+        }
+    }
+    for base in ["C:\\Program Files", "C:\\Program Files (x86)"] {
+        let exe = std::path::PathBuf::from(base).join(dir).join(name).with_extension("exe");
+        if let Some(s) = exe.to_str() {
+            candidates.push(s.to_string());
         }
     }
     if let Some(paths) = std::env::var_os("PATH") {

@@ -1532,7 +1532,7 @@ impl<T: InvokeUiSession> Remote<T> {
     /// those unknown protobuf fields, silently falling back to a normal
     /// default session instead of the USB-only one the user actually asked
     /// for -- reject before that can happen.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn check_usbip_support(&self, peer_version: &str) -> bool {
         if self.peer_info.support_usbip {
             return true;
@@ -1621,7 +1621,7 @@ impl<T: InvokeUiSession> Remote<T> {
                                 return false;
                             }
                         }
-                        #[cfg(target_os = "linux")]
+                        #[cfg(any(target_os = "linux", target_os = "windows"))]
                         if self.handler.is_remote_usb() {
                             if !self.check_usbip_support(&peer_version) {
                                 self.handler.lc.write().unwrap().handle_peer_info(&pi);
