@@ -106,11 +106,14 @@ fn install_usbipd() -> Option<String> {
                 .map(|w| format!("{}\\System32\\msiexec.exe", w))
                 .unwrap_or_else(|_| "C:\\Windows\\System32\\msiexec.exe".to_string());
             log::info!("usbip: installing usbipd-win");
-            let ok = run_elevated_wait(&format!(
-                "\"{}\" /i \"{}\" /qn /norestart",
-                msiexec,
-                installer.to_string_lossy()
-            ));
+            let r = crate::platform
+                ::run_uac("cmd.exe", &format!(
+                    "/C \"{}\" /i \"{}\" /qn /norestart",
+                    msiexec,
+                    installer.to_string_lossy()
+                ));
+            eprintln!("usbip probe: run_uac -> {:?}", r);
+            let ok = r.unwrap_or(false);
             if !ok {
                 log::error!("usbip: usbipd-win install failed");
             }
@@ -128,10 +131,12 @@ fn install_usbip() -> Option<String> {
     let installer =
         extract_installer(USBIP_SETUP_BYTES, "USBip-x64.exe")?;
     log::info!("usbip: installing USBip (usbip-win2)");
-    let ok = run_elevated_wait(&format!(
-        "\"{}\" /VERYSILENT /NORESTART /SUPPRESSMSGBOXES",
-        installer.to_string_lossy()
-    ));
+    let ok = crate::platform
+        ::run_uac("cmd.exe", &format!(
+            "/C \"{}\" /VERYSILENT /NORESTART /SUPPRESSMSGBOXES",
+            installer.to_string_lossy()
+        ))
+        .unwrap_or(false);
     if !ok {
         log::error!("usbip: USBip install failed");
     }
@@ -182,42 +187,6 @@ fn run_process(exe: &str, args: &[String]) -> Option<std::process::Output> {
     Command::new(exe).args(args).output().ok()
 }
 
-/// One UAC prompt for a `cmd.exe` child that runs `cmd` (its own tokens must
-/// be validated or already quoted; its stdout/stderr goes through cmd-level
-/// `>` redirection, since UAC-launched children cannot inherit our console).
-fn run_elevated_wait(cmd: &str) -> bool {
-    if cmd.contains('\'') {
-        log::error!("usbip: elevated command contains a quote: {:?}", cmd);
-        return false;
-    }
-    match Command::new(powershell_path())
-        .args(["-NoProfile", "-NonInteractive", "-Command"])
-        .arg(format!(
-            "Start-Process -FilePath cmd.exe -ArgumentList '/C','{}' -Verb RunAs -Wait",
-            cmd
-        ))
-        .status()
-    {
-        Ok(status) => {
-            if !status.success() {
-                log::error!("usbip: UAC-run cmd.exe failed: {:?}", cmd);
-            }
-            status.success()
-        }
-        Err(err) => {
-            log::error!("usbip: failed to run powershell: {}", err);
-            false
-        }
-    }
-}
-
-/// Blocking; call via `spawn_blocking`. Same contract as
-/// `platform::linux::run_usbip_privileged`: `true` when the mapped
-/// privileged operation finished successfully. The RustDesk *service*
-/// (SYSTEM, the controlled side in practice) runs directly; the desktop
-/// client (non-elevated) goes through one UAC prompt instead, and the side
-/// effect cannot be verified from inside it -- matching the Linux sudo
-/// behavior where the caller relies only on success/failure reporting.
 pub fn run_usbip_privileged(args: &[&str]) -> bool {
     let (exe, mapped_args) = map_args(args);
     let exe = match exe {
@@ -256,7 +225,9 @@ pub fn run_usbip_privileged(args: &[&str]) -> bool {
         }
         return output.status.success();
     }
-    run_elevated_wait(&command)
+    crate::platform
+        ::run_uac("cmd.exe", &format!("/C \"{}\"", command))
+        .unwrap_or(false)
 }
 
 /// Blocking; call via `spawn_blocking`. Same contract as
@@ -302,11 +273,14 @@ pub fn run_usbip_attach_privileged(listener_port: u16, bus_id: &str) -> Option<S
         return None;
     }
     let out_path = out_file.to_string_lossy().to_string();
-    let cmd = format!(
+    let attach_cmd = format!(
         "\"{}\" -t {} attach -r 127.0.0.1 -b {} > \"{}\" 2>&1 & \"{}\" port >> \"{}\" 2>&1",
         exe, port_str, bus_id, out_path, exe, out_path
     );
-    if !run_elevated_wait(&cmd) {
+    let ok = crate::platform
+        ::run_uac("cmd.exe", &format!("/C \"{}\"", attach_cmd))
+        .unwrap_or(false);
+    if !ok {
         return None;
     }
     std::fs::read_to_string(&out_file).ok()
@@ -368,21 +342,27 @@ pub(crate) fn list_local_devices_impl() -> Vec<UsbDevice> {
         return Vec::new();
     };
     let shared = shared_bus_ids_impl();
-    state
+    let devices: Vec<UsbDevice> = state
         .devices
         .into_iter()
         .map(|d| {
             let (vendor, product) = ids_from_instance_id(&d.instance_id);
             UsbDevice {
                 shared: shared.contains(&d.bus_id),
-                bus_id: d.bus_id,
+                bus_id: d.bus_id.clone(),
                 vendor,
                 product,
                 attached_port: -1,
                 ..Default::default()
             }
         })
-        .collect()
+        .collect();
+    log::info!(
+        "usbip: listed {} device(s) from `usbipd state` ({} shared)",
+        devices.len(),
+        shared.len()
+    );
+    devices
 }
 
 /// Bus ids currently bound by `usbipd bind`: a bound device owns a non-null
@@ -397,4 +377,34 @@ pub(crate) fn shared_bus_ids_impl() -> HashSet<String> {
         .filter(|d| d.stub_instance_id.is_some())
         .map(|d| d.bus_id)
         .collect()
+}
+
+#[cfg(test)]
+#[cfg(windows)]
+mod local_probe_tests {
+    use super::*;
+
+    // Opt-in because it shells out to the real `usbipd` on this machine:
+    // RUSTDESK_TEST_LOCAL_USBIP=1 cargo test --lib local_probe
+    #[test]
+    fn local_probe_lists_devices_when_usbipd_is_installed() {
+        if std::env::var("RUSTDESK_TEST_LOCAL_USBIP").as_deref() != Ok("1") {
+            eprintln!("skipping: set RUSTDESK_TEST_LOCAL_USBIP=1 to run the local probe");
+            return;
+        }
+        let devices = list_local_devices_impl();
+        eprintln!("usbip local probe: {} device(s)", devices.len());
+        for d in devices.iter() {
+            eprintln!("  - {} ({}:{}) shared={}", d.bus_id, d.vendor, d.product, d.shared);
+        }
+        assert!(!devices.is_empty(), "usbipd state returned no devices");
+    }
+
+    #[test]
+    fn ids_from_instance_id_shape() {
+        assert_eq!(
+            ids_from_instance_id(r"USB\VID_04F2&PID_B766\01.00.00"),
+            ("04F2".to_string(), "B766".to_string())
+        );
+    }
 }

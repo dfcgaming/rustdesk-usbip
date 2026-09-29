@@ -988,8 +988,10 @@ class RecentPeerCard extends BasePeerCard {
       menuItems.add(_terminalRunAsAdminAction(context));
     }
 
-    if ((isLinux && peer.platform == kPeerPlatformLinux) ||
-        (isWindows && peer.platform == kPeerPlatformWindows)) {
+    if ((isLinux || isWindows) &&
+        (peer.platform == kPeerPlatformLinux ||
+            peer.platform == kPeerPlatformWindows ||
+            peer.platform.isEmpty)) {
       menuItems.add(_remoteUsbAction(context));
     }
 
@@ -1058,8 +1060,10 @@ class FavoritePeerCard extends BasePeerCard {
       menuItems.add(_terminalRunAsAdminAction(context));
     }
 
-    if ((isLinux && peer.platform == kPeerPlatformLinux) ||
-        (isWindows && peer.platform == kPeerPlatformWindows)) {
+    if ((isLinux || isWindows) &&
+        (peer.platform == kPeerPlatformLinux ||
+            peer.platform == kPeerPlatformWindows ||
+            peer.platform.isEmpty)) {
       menuItems.add(_remoteUsbAction(context));
     }
 
@@ -1123,8 +1127,10 @@ class DiscoveredPeerCard extends BasePeerCard {
       menuItems.add(_terminalRunAsAdminAction(context));
     }
 
-    if ((isLinux && peer.platform == kPeerPlatformLinux) ||
-        (isWindows && peer.platform == kPeerPlatformWindows)) {
+    if ((isLinux || isWindows) &&
+        (peer.platform == kPeerPlatformLinux ||
+            peer.platform == kPeerPlatformWindows ||
+            peer.platform.isEmpty)) {
       menuItems.add(_remoteUsbAction(context));
     }
 
@@ -1187,8 +1193,10 @@ class AddressBookPeerCard extends BasePeerCard {
       menuItems.add(_terminalRunAsAdminAction(context));
     }
 
-    if ((isLinux && peer.platform == kPeerPlatformLinux) ||
-        (isWindows && peer.platform == kPeerPlatformWindows)) {
+    if ((isLinux || isWindows) &&
+        (peer.platform == kPeerPlatformLinux ||
+            peer.platform == kPeerPlatformWindows ||
+            peer.platform.isEmpty)) {
       menuItems.add(_remoteUsbAction(context));
     }
 
@@ -1349,8 +1357,10 @@ class MyGroupPeerCard extends BasePeerCard {
       menuItems.add(_terminalRunAsAdminAction(context));
     }
 
-    if ((isLinux && peer.platform == kPeerPlatformLinux) ||
-        (isWindows && peer.platform == kPeerPlatformWindows)) {
+    if ((isLinux || isWindows) &&
+        (peer.platform == kPeerPlatformLinux ||
+            peer.platform == kPeerPlatformWindows ||
+            peer.platform.isEmpty)) {
       menuItems.add(_remoteUsbAction(context));
     }
 
