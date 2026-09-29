@@ -22,6 +22,7 @@ import '../../models/platform_model.dart';
 import '../../common/shared_state.dart';
 import './popup_menu.dart';
 import './kb_layout_type_chooser.dart';
+import '../../utils/multi_window_manager.dart';
 import 'package:flutter_hbb/utils/scale.dart';
 import 'package:flutter_hbb/common/widgets/custom_scale_base.dart';
 
@@ -846,6 +847,12 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
       toolbarItems.add(_KeyboardMenu(id: widget.id, ffi: widget.ffi));
     }
     toolbarItems.add(_ChatMenu(id: widget.id, ffi: widget.ffi));
+    final piUsbip = widget.ffi.ffiModel.pi.features.usbip;
+    if ((isWindows || isLinux) &&
+        piUsbip &&
+        widget.ffi.connType == ConnType.defaultConn) {
+      toolbarItems.add(_UsbMenu(id: widget.id, ffi: widget.ffi));
+    }
     if (!isWeb) {
       toolbarItems.add(_VoiceCallMenu(id: widget.id, ffi: widget.ffi));
     }
@@ -2863,8 +2870,31 @@ class _ChatMenuState extends State<_ChatMenu> {
   }
 }
 
-class _VoiceCallMenu extends StatelessWidget {
+class _UsbMenu extends StatelessWidget {
   final String id;
+  final FFI ffi;
+
+  const _UsbMenu({Key? key, required this.id, required this.ffi})
+      : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return _IconMenuButton(
+      tooltip: translate('USB forwarding'),
+      icon: const Icon(
+        Icons.usb,
+        size: 20,
+        color: Colors.white,
+      ),
+      onPressed: () =>
+          rustDeskWinManager.newRemoteUsb(id),
+      color: _ToolbarTheme.blueColor,
+      hoverColor: _ToolbarTheme.hoverBlueColor,
+    );
+  }
+}
+
+class _VoiceCallMenu extends StatelessWidget {  final String id;
   final FFI ffi;
   _VoiceCallMenu({
     Key? key,

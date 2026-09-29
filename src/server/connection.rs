@@ -2411,8 +2411,32 @@ impl Connection {
         usbip.handle(ch, || {
             #[cfg(feature = "flutter")]
             Self::log_usb_permission_diagnostics("usb channel", &self.control_permissions);
-            Self::permission(keys::OPTION_ALLOW_USBIP, &self.control_permissions)
+            Self::usb_permission(&self.control_permissions)
         });
+    }
+
+    /// USB's turn on the permission dial: `Permission::usb` is the newest
+    /// enum value in the relayed session permissions, so a relay/hbbs built
+    /// before it leaves the bits at "not set" (`00`) even when the session is
+    /// otherwise fully trusted. Treating "not set" as "not spoken about"
+    /// (fall back to the local `allow-usbip` option, which gates the whole
+    /// feature) keeps those peers working; an explicit `01`-disable resolved
+    /// by a newer hbbs still denies.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    fn usb_permission(control_permissions: &Option<ControlPermissions>) -> bool {
+        if let Some(cp) = control_permissions {
+            let bits = crate::get_control_permission(
+                cp.permissions,
+                hbb_common::rendezvous_proto::control_permissions::Permission::usb,
+            );
+            if bits == Some(false) {
+                return false;
+            }
+            if bits == Some(true) {
+                return true;
+            }
+        }
+        Self::is_permission_enabled_locally(keys::OPTION_ALLOW_USBIP)
     }
 
     /// One line per deciding frame: the per-session control-permissions bitmap
@@ -2998,7 +3022,7 @@ impl Connection {
                     {
                         #[cfg(feature = "flutter")]
                         Self::log_usb_permission_diagnostics("RemoteUsb login", &self.control_permissions);
-                        if !Self::permission(keys::OPTION_ALLOW_USBIP, &self.control_permissions)
+                        if !Self::usb_permission(&self.control_permissions)
                         {
                             self.send_login_error("No permission of USB forwarding").await;
                             sleep(1.).await;

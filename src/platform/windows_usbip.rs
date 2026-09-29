@@ -359,7 +359,12 @@ fn ids_from_instance_id(instance_id: &str) -> (String, String) {
 }
 
 pub(crate) fn list_local_devices_impl() -> Vec<UsbDevice> {
-    let Some(state) = usbipd_state() else {
+    // The listing is the feature's first touchpoint on a fresh machine:
+    // without `usbipd` the "Peer's devices"/"My local devices" tabs stay
+    // silently empty, which reads as a broken feature. Bring the vendored
+    // service up there instead (one elevation prompt, then the normal state
+    // query); when it is unavailable, an empty list is returned as before.
+    let Some(state) = install_usbipd().and_then(|_| usbipd_state()) else {
         return Vec::new();
     };
     let shared = shared_bus_ids_impl();
